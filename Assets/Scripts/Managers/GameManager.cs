@@ -54,6 +54,10 @@ public class GameManager : MonoBehaviour
     [Tooltip("Container (panel) holding Rematch / Back to Menu buttons. Hidden until the game (match) ends.")]
     public GameObject m_MatchEndButtons;
 
+    [Header("Pause UI")]
+    [Tooltip("Panel shown when the game is paused (Time.timeScale=0).")]
+    public GameObject m_GamePausedPanel;
+
     private AudioSource m_AudioSource;          // (Optional) existing AudioSource on this object (may be music)
     private AudioSource m_SfxSource;            // Dedicated AudioSource for one-shot SFX (game-end clip)
     private List<AudioSource> m_PausedAudioSources = new List<AudioSource>();
@@ -66,6 +70,7 @@ public class GameManager : MonoBehaviour
     private bool m_RoundActive;                 // True while RoundPlaying is in progress (used for heart spawning loop).
     private int m_ActiveTankCount;              // Number of tanks actually spawned for current mode.
     private Coroutine m_TeamCountRoutine;       // UI updater for showing live team counts during team modes.
+    private bool m_IsPaused;                    // True while player has paused the match.
 
     private struct SpawnSpec
     {
@@ -112,6 +117,10 @@ public class GameManager : MonoBehaviour
         // Hide match-end buttons until the entire game concludes.
         if (m_MatchEndButtons)
             m_MatchEndButtons.SetActive(false);
+
+        // Hide pause panel at start.
+        if (m_GamePausedPanel)
+            m_GamePausedPanel.SetActive(false);
     }
 
     private bool IsTeamMode()
@@ -392,13 +401,15 @@ public class GameManager : MonoBehaviour
     {
         if (tankInstance == null) return;
 
-        var movement = tankInstance.GetComponent<TankMovement>();
-        var shooting = tankInstance.GetComponent<TankShooting>();
+        // Try to locate movement & shooting components on root first, then children (covers prefab variations).
+        var movement = tankInstance.GetComponent<TankMovement>() ?? tankInstance.GetComponentInChildren<TankMovement>(true);
+        var shooting = tankInstance.GetComponent<TankShooting>() ?? tankInstance.GetComponentInChildren<TankShooting>(true);
 
-        // Disable player input scripts (AI will take over movement & firing)
-        if (movement) movement.enabled = false;
-        if (shooting) shooting.enabled = false; // disable input-driven Update; AI will call methods directly
+        // Disable player input scripts (AI will take over movement & firing). Guard nulls.
+        if (movement != null) movement.enabled = false;
+        if (shooting != null) shooting.enabled = false; // disable Update polling of input axes
 
+        // Attach AI if not already present and initialize with found components.
         if (!tankInstance.GetComponent<TankAI>())
         {
             var ai = tankInstance.AddComponent<TankAI>();
@@ -599,22 +610,18 @@ public class GameManager : MonoBehaviour
     {
         if (IsTeamMode())
         {
-            if (m_GameMode == GameMode.FiveVsFive_PvP)
+            if (m_GameMode == GameMode.FiveVsFive_PvP || m_GameMode == GameMode.FiveVsFive_PvE)
             {
-                // PvP extra rule: end as soon as either human dies
-                bool humanTeamAAlive = false;
-                bool humanTeamBAlive = false;
+                // In both PvP (two humans) and PvE (one human) end the round immediately when any human dies.
                 for (int i = 0; i < m_ActiveTankCount; i++)
                 {
                     var tm = m_Tanks[i];
                     if (tm == null || tm.m_Instance == null) continue;
-                    if (!tm.m_IsHuman) continue;
-                    bool alive = tm.m_Instance.activeSelf;
-                    if (tm.m_TeamId == 0) humanTeamAAlive |= alive;
-                    else if (tm.m_TeamId == 1) humanTeamBAlive |= alive;
+                    if (!tm.m_IsHuman) continue; // skip bots
+                    if (!tm.m_Instance.activeSelf)
+                        return true; // a human tank just died
                 }
-                if (!humanTeamAAlive || !humanTeamBAlive)
-                    return true;
+                // If no humans configured (misconfiguration), fall back to team elimination below.
             }
 
             // Team elimination for all team modes (PvP and PvE)
@@ -694,6 +701,28 @@ public class GameManager : MonoBehaviour
                 if (aAlive && !bAlive) return humanA; // Team A wins
                 if (!aAlive && bAlive) return humanB; // Team B wins
                 if (!aAlive && !bAlive) return null;  // Both died -> draw
+            }
+            else if (m_GameMode == GameMode.FiveVsFive_PvE)
+            {
+                // Single human (Team A) vs full bot team (Team B). If human dead, bots win immediately.
+                TankManager human = null;
+                for (int i = 0; i < m_ActiveTankCount; i++)
+                {
+                    var tm = m_Tanks[i];
+                    if (tm == null || tm.m_Instance == null) continue;
+                    if (tm.m_IsHuman)
+                    {
+                        human = tm;
+                        break;
+                    }
+                }
+                bool humanAlive = human != null && human.m_Instance != null && human.m_Instance.activeSelf;
+                if (human != null && !humanAlive)
+                {
+                    // Human dead -> opposing team wins (assumes human team is 0; if not, invert).
+                    int winningTeam = human.m_TeamId == 0 ? 1 : 0;
+                    return GetFirstAliveOnTeam(winningTeam);
+                }
             }
 
             // Team-elimination winner (works for PvP and PvE)
@@ -987,5 +1016,66 @@ public class GameManager : MonoBehaviour
     {
         Time.timeScale = 1f;
         SceneManager.LoadScene("Menu");
+    }
+
+    // ---------------- Pause / Continue ----------------
+    /// <summary>
+    /// Pauses gameplay by setting Time.timeScale to 0, disabling tank control and showing the pause panel.
+    /// Wire this to the Pause button OnClick.
+    /// </summary>
+    public void PauseGame()
+    {
+        if (m_IsPaused || m_GameOver) return; // don't pause after game over
+        m_IsPaused = true;
+        Time.timeScale = 0f;
+
+        // Disable control so input doesn't accumulate (optional since timeScale=0, but safer for custom scripts)
+        DisableTankControl();
+
+        // Show panel
+        if (m_GamePausedPanel)
+            m_GamePausedPanel.SetActive(true);
+
+        // Pause all non-music audio (reuse list container)
+        m_PausedAudioSources.Clear();
+        AudioSource[] allSources = FindObjectsByType<AudioSource>(FindObjectsSortMode.None);
+        foreach (var src in allSources)
+        {
+            if (src == null) continue;
+            if (src == m_SfxSource) continue; // leave dedicated sfx source alone
+            if (src.isPlaying)
+            {
+                src.Pause();
+                m_PausedAudioSources.Add(src);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Resumes gameplay from a paused state. Wire to Continue button OnClick.
+    /// </summary>
+    public void ContinueGame()
+    {
+        if (!m_IsPaused) return;
+        m_IsPaused = false;
+        Time.timeScale = 1f;
+
+        // Re-enable tank control only if the round is active and game not over.
+        if (!m_GameOver && m_RoundActive)
+            EnableTankControl();
+
+        if (m_GamePausedPanel)
+            m_GamePausedPanel.SetActive(false);
+
+        // Resume any audio that was paused for the pause state (unless game ended in meantime)
+        if (!m_GameOver && m_PausedAudioSources.Count > 0)
+        {
+            foreach (var src in m_PausedAudioSources)
+            {
+                if (src != null)
+                    src.UnPause();
+            }
+        }
+        m_PausedAudioSources.Clear();
     }
 }

@@ -29,11 +29,13 @@ public class ShellExplosion : MonoBehaviour
         // Go through all the colliders...
         for (int i = 0; i < colliders.Length; i++)
         {
-            // ... and find their rigidbody.
-            Rigidbody targetRigidbody = colliders[i].GetComponent<Rigidbody> ();
+            // Use attachedRigidbody (works for child colliders) or climb to parent.
+            Rigidbody targetRigidbody = colliders[i].attachedRigidbody;
+            if (targetRigidbody == null)
+                targetRigidbody = colliders[i].GetComponentInParent<Rigidbody>();
 
-            // If they don't have a rigidbody, go on to the next collider.
-            if (!targetRigidbody)
+            // If still no rigidbody, skip.
+            if (targetRigidbody == null)
                 continue;
 
             // Friendly-fire filter: skip if same team
@@ -47,7 +49,10 @@ public class ShellExplosion : MonoBehaviour
             targetRigidbody.AddExplosionForce (m_ExplosionForce, transform.position, m_ExplosionRadius);
 
             // Find the TankHealth script associated with the rigidbody.
-            TankHealth targetHealth = targetRigidbody.GetComponent<TankHealth> ();
+            // Find TankHealth on same object or its parents (handles child collider cases).
+            TankHealth targetHealth = targetRigidbody.GetComponent<TankHealth>();
+            if (targetHealth == null)
+                targetHealth = targetRigidbody.GetComponentInParent<TankHealth>();
 
             // If there is no TankHealth script attached to the gameobject, go on to the next collider.
             if (!targetHealth)
@@ -59,8 +64,16 @@ public class ShellExplosion : MonoBehaviour
             // Deal this damage in a multiplayer-safe way: only Master replicates to all.
             if (PhotonNetwork.IsConnected)
             {
+                // Only master applies damage to avoid double hits; if no master (offline mode), fall back.
                 if (PhotonNetwork.IsMasterClient)
+                {
                     targetHealth.TakeDamageNetworked(damage);
+                }
+                else if (!PhotonNetwork.IsMasterClient && !PhotonNetwork.IsConnectedAndReady)
+                {
+                    // Safety fallback if Photon is half-initialized.
+                    targetHealth.TakeDamage(damage);
+                }
             }
             else
             {

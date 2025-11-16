@@ -17,8 +17,20 @@ public class MultiplayerGameManager : MonoBehaviourPunCallbacks
     public Transform blueSpawn;
     public Transform redSpawn;
 
+    [Header("5v5 Spawn Points")]
+    public Transform[] blueTeamSpawns5v5; // 5 spawn points for blue team
+    public Transform[] redTeamSpawns5v5;  // 5 spawn points for red team
+
     private readonly Dictionary<int, GameObject> _playerTanks = new Dictionary<int, GameObject>();
     private readonly Dictionary<int, int> _playerTeam = new Dictionary<int, int>();
+    private readonly Dictionary<int, (Vector3 pos, Quaternion rot)> _spawnByActor = new Dictionary<int, (Vector3, Quaternion)>();
+
+    // 5v5 bookkeeping
+    private bool _is5v5 = false;
+    private bool _loopStarted = false;
+    private bool _spawned5v5 = false;
+    private int _bluePlayerActor = 0;
+    private int _redPlayerActor = 0;
 
     [Header("UI")]
     [Tooltip("Overlay message text (MessageCanvas/Text) shown for rounds and results.")]
@@ -78,7 +90,7 @@ public class MultiplayerGameManager : MonoBehaviourPunCallbacks
             return;
         }
 
-        // Hide team count UI in 1v1 if provided and reset match-end buttons.
+        // We'll decide visibility after we know the mode.
         if (teamCountUIRoot != null) teamCountUIRoot.SetActive(false);
         if (matchEndButtons != null) matchEndButtons.SetActive(false);
 
@@ -97,10 +109,73 @@ public class MultiplayerGameManager : MonoBehaviourPunCallbacks
         // Master handles spawning for all; simpler & avoids RPC null when no PhotonView.
         if (PhotonNetwork.IsMasterClient)
         {
-            SpawnAllPlayers1v1();
-            StartCoroutine(GameLoop());
-            photonView.RPC(nameof(RpcRebuildCameraTargets), RpcTarget.All);
+            string mode = "1v1";
+            if (PhotonNetwork.CurrentRoom != null && PhotonNetwork.CurrentRoom.CustomProperties.ContainsKey("mode"))
+                mode = PhotonNetwork.CurrentRoom.CustomProperties["mode"] as string;
+            _is5v5 = (mode == "5v5");
+            if (teamCountUIRoot != null) teamCountUIRoot.SetActive(_is5v5);
+
+            if (_is5v5)
+            {
+                if (PhotonNetwork.PlayerList.Length >= 2)
+                {
+                    SpawnAllPlayers5v5();
+                    photonView.RPC(nameof(RpcRebuildCameraTargets), RpcTarget.All);
+                    _loopStarted = true;
+                    StartCoroutine(GameLoop());
+                }
+                // else: wait for second player then spawn in OnPlayerEnteredRoom
+            }
+            else
+            {
+                SpawnAllPlayers1v1();
+                photonView.RPC(nameof(RpcRebuildCameraTargets), RpcTarget.All);
+                _loopStarted = true;
+                StartCoroutine(GameLoop());
+            }
         }
+        else
+        {
+            // Non-master: still set up UI visibility based on mode.
+            var room = PhotonNetwork.CurrentRoom;
+            string mode = room != null && room.CustomProperties != null && room.CustomProperties.ContainsKey("mode")
+                ? (room.CustomProperties["mode"] as string)
+                : "1v1";
+            _is5v5 = (mode == "5v5");
+            if (teamCountUIRoot != null) teamCountUIRoot.SetActive(_is5v5);
+        }
+    }
+
+    // Exposed for TeamCountUI. Returns false when not a team mode.
+    public bool TryGetTeamAliveCounts(out int blueAlive, out int redAlive)
+    {
+        blueAlive = 0; redAlive = 0;
+        if (!_is5v5)
+            return false;
+
+        // Count alive per team using our dictionaries first
+        foreach (var kv in _playerTanks)
+        {
+            var go = kv.Value;
+            if (go == null || !go.activeSelf) continue;
+            int actor = kv.Key;
+            int team = _playerTeam.ContainsKey(actor) ? _playerTeam[actor] : -1;
+            if (team == 0) blueAlive++; else if (team == 1) redAlive++;
+        }
+
+        // Fallback on clients if dictionaries not yet filled
+        if (blueAlive == 0 && redAlive == 0)
+        {
+            var setups = Object.FindObjectsByType<MultiplayerTankSetup>(FindObjectsSortMode.None);
+            foreach (var s in setups)
+            {
+                if (s == null || !s.gameObject.activeSelf) continue;
+                var tag = s.GetComponent<TankTeam>();
+                if (tag == null) continue;
+                if (tag.TeamId == 0) blueAlive++; else if (tag.TeamId == 1) redAlive++;
+            }
+        }
+        return true;
     }
 
     private void SpawnAllPlayers1v1()
@@ -117,12 +192,68 @@ public class MultiplayerGameManager : MonoBehaviourPunCallbacks
         {
             var (p, r) = GetSpawn(blueSpawn);
             SpawnTankFor(players[0], p, r, 0);
+            _bluePlayerActor = players[0].ActorNumber;
+            _spawnByActor[_bluePlayerActor] = (p, r);
         }
         if (players.Length >= 2 && redSpawn != null)
         {
             var (p, r) = GetSpawn(redSpawn);
             SpawnTankFor(players[1], p, r, 1);
+            _redPlayerActor = players[1].ActorNumber;
+            _spawnByActor[_redPlayerActor] = (p, r);
         }
+    }
+
+    // 5v5: 2 real players (one per team), 8 bots (4 per team)
+    private void SpawnAllPlayers5v5()
+    {
+        Player[] players = PhotonNetwork.PlayerList;
+        if (players.Length < 2)
+        {
+            Debug.LogWarning("[MultiplayerGameManager] Need 2 players for 5v5 mode.");
+            return;
+        }
+        // Assign first player to blue, second to red
+        if (blueTeamSpawns5v5.Length < 5 || redTeamSpawns5v5.Length < 5)
+        {
+            Debug.LogError("[MultiplayerGameManager] Not enough 5v5 spawn points assigned.");
+            return;
+        }
+        // Spawn blue player
+        var (bp, br) = (blueTeamSpawns5v5[0].position, blueTeamSpawns5v5[0].rotation);
+        SpawnTankFor(players[0], bp, br, 0);
+        _bluePlayerActor = players[0].ActorNumber;
+        _spawnByActor[_bluePlayerActor] = (bp, br);
+        // Spawn red player
+        var (rp, rr) = (redTeamSpawns5v5[0].position, redTeamSpawns5v5[0].rotation);
+        SpawnTankFor(players[1], rp, rr, 1);
+        _redPlayerActor = players[1].ActorNumber;
+        _spawnByActor[_redPlayerActor] = (rp, rr);
+        // Spawn blue bots (slots 1-4)
+        for (int i = 1; i < 5; i++)
+        {
+            SpawnBotTank(0, blueTeamSpawns5v5[i].position, blueTeamSpawns5v5[i].rotation, i);
+        }
+        // Spawn red bots (slots 1-4)
+        for (int i = 1; i < 5; i++)
+        {
+            SpawnBotTank(1, redTeamSpawns5v5[i].position, redTeamSpawns5v5[i].rotation, i);
+        }
+        _spawned5v5 = true;
+    }
+
+    // Spawns a bot tank for the given team at the given position/rotation
+    private void SpawnBotTank(int teamId, Vector3 pos, Quaternion rot, int botIndex)
+    {
+        // Use negative actor numbers for bots to avoid collision with real players
+        int botActorNumber = -(teamId * 10 + botIndex); // e.g. -1, -2, -3, -4 for blue; -11, -12, -13, -14 for red
+        object[] initData = { teamId, botActorNumber, 1 }; // 1 = isBot
+        GameObject tank = PhotonNetwork.Instantiate(tankPrefab.name, pos, rot, 0, initData);
+        _playerTanks[botActorNumber] = tank;
+        _playerTeam[botActorNumber] = teamId;
+        _spawnByActor[botActorNumber] = (pos, rot);
+        if (!_wins.ContainsKey(botActorNumber))
+            _wins[botActorNumber] = 0;
     }
     private void SpawnTankFor(Player owner, Vector3 pos, Quaternion rot, int teamId)
     {
@@ -148,15 +279,31 @@ public class MultiplayerGameManager : MonoBehaviourPunCallbacks
 
         if (!PhotonNetwork.IsMasterClient)
             return;
+        if (_is5v5)
+        {
+            if (!_spawned5v5 && PhotonNetwork.PlayerList.Length >= 2)
+            {
+                SpawnAllPlayers5v5();
+                photonView.RPC(nameof(RpcRebuildCameraTargets), RpcTarget.All);
+                if (!_loopStarted)
+                {
+                    _loopStarted = true;
+                    StartCoroutine(GameLoop());
+                }
+            }
+            return;
+        }
 
-        // Simple rule for 1v1: if only one tank exists, spawn the second at red.
-        if (!_playerTanks.ContainsKey(newPlayer.ActorNumber) && PhotonNetwork.IsMasterClient)
+        // 1v1 fallback: if only one tank exists, spawn the second at red.
+        if (!_playerTanks.ContainsKey(newPlayer.ActorNumber))
         {
             bool blueTaken = _playerTanks.ContainsKey(PhotonNetwork.PlayerList[0].ActorNumber);
             int teamId = blueTaken ? 1 : 0;
             Transform spawn = teamId == 0 ? blueSpawn : redSpawn;
             var (p, r) = GetSpawn(spawn);
             SpawnTankFor(newPlayer, p, r, teamId);
+            if (teamId == 0) _bluePlayerActor = newPlayer.ActorNumber; else _redPlayerActor = newPlayer.ActorNumber;
+            _spawnByActor[newPlayer.ActorNumber] = (p, r);
             photonView.RPC(nameof(RpcRebuildCameraTargets), RpcTarget.All);
         }
     }
@@ -199,7 +346,7 @@ public class MultiplayerGameManager : MonoBehaviourPunCallbacks
             StartCoroutine(HeartSpawnLoop());
         }
 
-        while (AliveCount() > 1)
+        while ((_is5v5 ? PlayersAliveCount() : AliveCount()) > 1)
             yield return null;
     }
 
@@ -258,15 +405,51 @@ public class MultiplayerGameManager : MonoBehaviourPunCallbacks
         return alive;
     }
 
+    // Count only the two human players for 5v5 mode
+    private int PlayersAliveCount()
+    {
+        int alive = 0;
+        if (_bluePlayerActor != 0 && _playerTanks.TryGetValue(_bluePlayerActor, out var blueGo) && blueGo != null && blueGo.activeSelf) alive++;
+        if (_redPlayerActor  != 0 && _playerTanks.TryGetValue(_redPlayerActor, out var redGo)  && redGo  != null && redGo.activeSelf)  alive++;
+
+        if (alive == 2 || alive == 0)
+            return alive;
+
+        // Fallback if dictionaries not populated on this client
+        var setups = Object.FindObjectsByType<MultiplayerTankSetup>(FindObjectsSortMode.None);
+        int foundBlue = 0, foundRed = 0;
+        foreach (var s in setups)
+        {
+            if (s == null) continue;
+            var pv = s.photonView;
+            var data = pv != null ? pv.InstantiationData : null;
+            if (data == null || data.Length < 2) continue;
+            int actor = (int)data[1];
+            if (actor == _bluePlayerActor && s.gameObject.activeSelf) foundBlue = 1;
+            if (actor == _redPlayerActor  && s.gameObject.activeSelf) foundRed  = 1;
+        }
+        return foundBlue + foundRed;
+    }
+
     private int GetRoundWinner()
     {
         int winner = 0;
-        // Check known mappings first
-        foreach (var kv in _playerTanks)
+        if (_is5v5)
         {
-            if (kv.Value != null && kv.Value.activeSelf)
+            bool blueAlive = _bluePlayerActor != 0 && _playerTanks.TryGetValue(_bluePlayerActor, out var bgo) && bgo != null && bgo.activeSelf;
+            bool redAlive  = _redPlayerActor  != 0 && _playerTanks.TryGetValue(_redPlayerActor,  out var rgo) && rgo != null && rgo.activeSelf;
+            if (blueAlive && !redAlive) return _bluePlayerActor;
+            if (redAlive && !blueAlive) return _redPlayerActor;
+        }
+        else
+        {
+            // Check known mappings first (1v1 only)
+            foreach (var kv in _playerTanks)
             {
-                if (winner == 0) winner = kv.Key; else return 0; // more than one alive => no winner
+                if (kv.Value != null && kv.Value.activeSelf)
+                {
+                    if (winner == 0) winner = kv.Key; else return 0; // more than one alive => no winner
+                }
             }
         }
         // Fallback on clients where dictionary may be empty
@@ -276,10 +459,26 @@ public class MultiplayerGameManager : MonoBehaviourPunCallbacks
             foreach (var setup in setups)
             {
                 var pv = setup.photonView;
-                if (pv != null && pv.Owner != null && setup.gameObject.activeSelf)
+                var data = pv != null ? pv.InstantiationData : null;
+                if (pv != null && setup.gameObject.activeSelf)
                 {
-                    int actor = pv.OwnerActorNr;
-                    if (winner == 0) winner = actor; else return 0;
+                    if (_is5v5)
+                    {
+                        if (data != null && data.Length >= 2)
+                        {
+                            int actor = (int)data[1];
+                            if (actor == _bluePlayerActor) return _bluePlayerActor;
+                            if (actor == _redPlayerActor)  return _redPlayerActor;
+                        }
+                    }
+                    else
+                    {
+                        int actor = (pv.Owner != null) ? pv.OwnerActorNr : 0;
+                        if (actor != 0)
+                        {
+                            if (winner == 0) winner = actor; else return 0;
+                        }
+                    }
                 }
             }
         }
@@ -294,8 +493,17 @@ public class MultiplayerGameManager : MonoBehaviourPunCallbacks
             var go = kv.Value;
             if (go == null) continue;
             int team = _playerTeam.ContainsKey(actor) ? _playerTeam[actor] : 0;
-            Transform root = team == 0 ? blueSpawn : redSpawn;
-            var (p, r) = GetSpawn(root);
+            (Vector3 p, Quaternion r) spawnPR;
+            if (_spawnByActor.TryGetValue(actor, out spawnPR))
+            {
+                // Use stored spawn
+            }
+            else
+            {
+                Transform root = team == 0 ? blueSpawn : redSpawn;
+                spawnPR = GetSpawn(root);
+            }
+            var p = spawnPR.p; var r = spawnPR.r;
             photonView.RPC(nameof(RpcResetTank), RpcTarget.All, actor, p, r);
         }
     }
@@ -318,11 +526,11 @@ public class MultiplayerGameManager : MonoBehaviourPunCallbacks
             foreach (var setup in setups)
             {
                 var pv = setup.photonView;
-                if (pv != null && pv.OwnerActorNr == actorNumber)
+                var data = pv != null ? pv.InstantiationData : null;
+                if (data != null && data.Length >= 2 && (int)data[1] == actorNumber)
                 {
                     go = setup.gameObject;
                     _playerTanks[actorNumber] = go;
-                    // also backfill team map if possible from TankTeam
                     var tag = go.GetComponent<TankTeam>();
                     if (tag != null) _playerTeam[actorNumber] = tag.TeamId;
                     break;
@@ -388,14 +596,24 @@ public class MultiplayerGameManager : MonoBehaviourPunCallbacks
 
     private string BuildEndMessage(bool gameOver, int winnerActor)
     {
-        // Map actors to teams
-        int blueActor = 0, redActor = 0;
-        foreach (var kv in _playerTeam)
+        // Prefer the recorded human actors for each team (avoid bot actor numbers)
+        int blueActor = _bluePlayerActor;
+        int redActor  = _redPlayerActor;
+        
+        // Fallback: derive from known mappings but only accept real (positive) actor numbers
+        if (blueActor == 0 || redActor == 0)
         {
-            if (kv.Value == 0) blueActor = kv.Key; else if (kv.Value == 1) redActor = kv.Key;
+            foreach (var kv in _playerTeam)
+            {
+                int actor = kv.Key;
+                int team  = kv.Value;
+                if (actor <= 0) continue; // skip bots
+                if (team == 0 && blueActor == 0) blueActor = actor;
+                if (team == 1 && redActor  == 0) redActor  = actor;
+            }
         }
 
-        // Player names with team colors
+        // Player names with team colors (fall back safely if still 0)
         string blueName = GetPlayerNickname(blueActor);
         string redName  = GetPlayerNickname(redActor);
         string blueLabel = Colorize(blueName, new Color(0.2f, 0.5f, 1f));
@@ -413,8 +631,8 @@ public class MultiplayerGameManager : MonoBehaviourPunCallbacks
             header = gameOver ? ($"{winnerLabel} WINS THE GAME!") : ($"{winnerLabel} WINS THE ROUND!");
         }
 
-        int blueWins = (blueActor != 0 && _wins.ContainsKey(blueActor)) ? _wins[blueActor] : 0;
-        int redWins  = (redActor  != 0 && _wins.ContainsKey(redActor))  ? _wins[redActor]  : 0;
+        int blueWins = (blueActor > 0 && _wins.ContainsKey(blueActor)) ? _wins[blueActor] : 0;
+        int redWins  = (redActor  > 0 && _wins.ContainsKey(redActor))  ? _wins[redActor]  : 0;
 
         string scoreboard = $"\n\n\n\n{blueLabel}: {blueWins} WINS\n{redLabel}: {redWins} WINS\n";
         return header + scoreboard;

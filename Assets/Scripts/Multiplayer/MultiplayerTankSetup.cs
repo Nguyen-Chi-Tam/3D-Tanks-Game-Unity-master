@@ -1,9 +1,10 @@
 using UnityEngine;
+using System.Collections.Generic;
 using Photon.Pun;
 using Photon.Realtime;
 
 [RequireComponent(typeof(PhotonView))]
-public class MultiplayerTankSetup : MonoBehaviourPun, IPunOwnershipCallbacks
+public class MultiplayerTankSetup : MonoBehaviourPun, IPunOwnershipCallbacks, IPunObservable
 {
     public Renderer[] coloredRenderers;
     public Color blueColor = new Color(0.2f, 0.5f, 1f);
@@ -13,9 +14,18 @@ public class MultiplayerTankSetup : MonoBehaviourPun, IPunOwnershipCallbacks
     int _ownerActorNumber;
     bool _roundLocked;
     bool _isBot;
+    Rigidbody _rb;
+
+    // Network interpolation state (for non-owners)
+    Vector3 _netPos;
+    Quaternion _netRot;
+    bool _netInitialized;
+    [SerializeField] float _posLerp = 12f;
+    [SerializeField] float _rotLerp = 12f;
 
     void Start()
     {
+        _rb = GetComponent<Rigidbody>();
         if (photonView.InstantiationData != null && photonView.InstantiationData.Length >= 2)
         {
             _teamId = (int)photonView.InstantiationData[0];
@@ -24,14 +34,45 @@ public class MultiplayerTankSetup : MonoBehaviourPun, IPunOwnershipCallbacks
                 _isBot = ((int)photonView.InstantiationData[2]) == 1;
         }
 
-        // Propagate team id to TankTeam component for friendly-fire checks and UI
+        // Make sure movement is network-synchronized for bots and remote players
+        TryEnsureNetworkSyncComponents();
+
+        // Ensure/propagate team id to TankTeam component for friendly-fire checks and UI
         var teamTag = GetComponent<TankTeam>();
-        if (teamTag != null)
-            teamTag.TeamId = _teamId;
+        if (teamTag == null) teamTag = gameObject.AddComponent<TankTeam>();
+        teamTag.TeamId = _teamId;
 
         ApplyTeamColor();
         ConfigureInputAndCamera();
         EnsureBotAIIfNeeded();
+        MarkBotHealthIfNeeded();
+    }
+
+    void TryEnsureNetworkSyncComponents()
+    {
+        var view = photonView;
+        if (view == null) return;
+
+        var observed = view.ObservedComponents ?? new List<Component>();
+
+        var trSync = GetComponent<PhotonTransformViewClassic>();
+        if (trSync == null)
+            trSync = gameObject.AddComponent<PhotonTransformViewClassic>();
+        if (!observed.Contains(trSync)) observed.Add(trSync);
+
+        var rb = GetComponent<Rigidbody>();
+        if (rb != null)
+        {
+            var rbSync = GetComponent<PhotonRigidbodyView>();
+            if (rbSync == null)
+                rbSync = gameObject.AddComponent<PhotonRigidbodyView>();
+            if (!observed.Contains(rbSync)) observed.Add(rbSync);
+        }
+
+        // Ensure this component is also observed to stream transforms if needed
+        if (!observed.Contains(this)) observed.Add(this);
+
+        view.ObservedComponents = observed;
     }
 
     void ApplyTeamColor()
@@ -55,7 +96,8 @@ public class MultiplayerTankSetup : MonoBehaviourPun, IPunOwnershipCallbacks
 
         var movement = GetComponent<TankMovement>();
         var shooting = GetComponent<TankShooting>();
-        bool enable = isLocal && !_roundLocked;
+        // Bots should NEVER use local player input even for the master client.
+        bool enable = isLocal && !_roundLocked && !_isBot;
         if (movement) movement.enabled = enable;
         if (shooting) shooting.enabled = enable;
         if (isLocal)
@@ -65,7 +107,7 @@ public class MultiplayerTankSetup : MonoBehaviourPun, IPunOwnershipCallbacks
 
         if (isLocal)
         {
-            var cam = FindObjectOfType<CameraControl>();
+            var cam = Object.FindFirstObjectByType<CameraControl>();
             if (cam != null)
             {
                 var list = new System.Collections.Generic.List<Transform>(cam.m_Targets ?? new Transform[0]);
@@ -84,8 +126,25 @@ public class MultiplayerTankSetup : MonoBehaviourPun, IPunOwnershipCallbacks
         if (!_isBot || !photonView.IsMine) return;
         var ai = GetComponent<TankAI>();
         if (ai == null) ai = gameObject.AddComponent<TankAI>();
+        // Auto-wire local components so AI works without GameManager context
+        var shoot = GetComponent<TankShooting>();
+        var move  = GetComponent<TankMovement>();
+        ai.Initialize(null, null, shoot, move);
         // Enable/disable with round lock
         ai.enabled = !_roundLocked;
+    }
+
+    void MarkBotHealthIfNeeded()
+    {
+        if (!_isBot) return;
+        var health = GetComponent<TankHealth>();
+        if (health != null)
+        {
+            health.m_UseForcedFill = true;
+            // Use the same blue as team blue by default
+            health.m_ForcedFillColor = new Color(0.2f, 0.5f, 1f);
+            health.SetHealthUI();
+        }
     }
 
     // Public API called from manager via SendMessage; also callable via RPC if desired
@@ -125,5 +184,38 @@ public class MultiplayerTankSetup : MonoBehaviourPun, IPunOwnershipCallbacks
     public void OnOwnershipTransferFailed(PhotonView targetView, Player senderOfFailedRequest)
     {
         // Optional: log if needed.
+    }
+
+    // -------- Basic transform replication fallback (bots/remote tanks) --------
+    public void OnPhotonSerializeView(PhotonStream stream, PhotonMessageInfo info)
+    {
+        if (stream.IsWriting)
+        {
+            stream.SendNext(transform.position);
+            stream.SendNext(transform.rotation);
+            stream.SendNext(_rb != null ? _rb.linearVelocity : Vector3.zero);
+        }
+        else
+        {
+            _netPos = (Vector3)stream.ReceiveNext();
+            _netRot = (Quaternion)stream.ReceiveNext();
+            Vector3 vel = (Vector3)stream.ReceiveNext();
+            if (_rb != null && !_rb.isKinematic)
+            {
+                // For owners this won't run; for remotes keep rb quiet
+                _rb.linearVelocity = vel;
+            }
+            _netInitialized = true;
+        }
+    }
+
+    void Update()
+    {
+        if (photonView.IsMine) return;
+        if (!_netInitialized) return;
+
+        // Smoothly move towards networked state for remote clients
+        transform.position = Vector3.Lerp(transform.position, _netPos, Time.deltaTime * _posLerp);
+        transform.rotation = Quaternion.Slerp(transform.rotation, _netRot, Time.deltaTime * _rotLerp);
     }
 }

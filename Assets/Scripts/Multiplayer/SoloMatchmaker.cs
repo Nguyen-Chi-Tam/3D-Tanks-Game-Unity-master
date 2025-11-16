@@ -34,10 +34,24 @@ namespace TanksGame.Managers
         [SerializeField] private GameObject versus;
 
         [Header("Match Settings")]
+
         [SerializeField] private byte maxPlayers = 2;
         [SerializeField] private string modePropertyKey = "mode";
         [SerializeField] private string modePropertyValue = "1v1";
         [SerializeField] private string sceneToLoadOnPair = "MultiplayerMain"; // default multiplayer scene
+
+        // 5v5 mode support
+        private string _pendingMode = null;
+        /// <summary>
+        /// Call this from the 5v5 button to start 5v5 matchmaking.
+        /// </summary>
+        public void StartMatchmaking5v5()
+        {
+            _pendingMode = "5v5";
+            maxPlayers = 2; // Only 2 real players, rest are bots
+            modePropertyValue = "5v5";
+            StartMatchmaking();
+        }
 
         [Header("Events")]
         public UnityEvent onPaired; // Invoke when second player present
@@ -74,9 +88,13 @@ namespace TanksGame.Managers
 
             TryApplyLocalProfileToPhoton();
 
+            // Always ensure scene sync is on before we start pairing.
+            // After leaving a previous match, MultiplayerGameManager turns this off,
+            // which would prevent the second client from auto-loading the game scene.
+            PhotonNetwork.AutomaticallySyncScene = true;
+
             if (!PhotonNetwork.IsConnected)
             {
-                PhotonNetwork.AutomaticallySyncScene = true;
                 PhotonNetwork.GameVersion = Application.version;
                 SetState(State.Connecting, "Connecting...");
                 PhotonNetwork.ConnectUsingSettings();
@@ -84,7 +102,10 @@ namespace TanksGame.Managers
             }
 
             TryApplyLocalProfileToPhoton();
-            JoinRandom1v1();
+            if (_pendingMode == "5v5")
+                JoinRandom5v5();
+            else
+                JoinRandom1v1();
         }
 
         public void CancelMatchmaking()
@@ -105,9 +126,15 @@ namespace TanksGame.Managers
         private void JoinRandom1v1()
         {
             SetState(State.Searching, "Finding your opponent...");
-
             var expectedProps = new Hashtable { { modePropertyKey, modePropertyValue } };
             PhotonNetwork.JoinRandomRoom(expectedProps, maxPlayers, MatchmakingMode.FillRoom, TypedLobby.Default, null, null);
+        }
+
+        private void JoinRandom5v5()
+        {
+            SetState(State.Searching, "Finding your 5v5 opponent...");
+            var expectedProps = new Hashtable { { modePropertyKey, "5v5" } };
+            PhotonNetwork.JoinRandomRoom(expectedProps, 2, MatchmakingMode.FillRoom, TypedLobby.Default, null, null);
         }
 
         private void CreateRoom1v1()
@@ -121,7 +148,20 @@ namespace TanksGame.Managers
                 CustomRoomProperties = new Hashtable { { modePropertyKey, modePropertyValue } },
                 CustomRoomPropertiesForLobby = new[] { modePropertyKey }
             };
+            PhotonNetwork.CreateRoom(roomName, opts, TypedLobby.Default);
+        }
 
+        private void CreateRoom5v5()
+        {
+            string roomName = $"mm5v5_{Guid.NewGuid().ToString("N").Substring(0, 8)}";
+            var opts = new RoomOptions
+            {
+                MaxPlayers = 2,
+                IsOpen = true,
+                IsVisible = true,
+                CustomRoomProperties = new Hashtable { { modePropertyKey, "5v5" } },
+                CustomRoomPropertiesForLobby = new[] { modePropertyKey }
+            };
             PhotonNetwork.CreateRoom(roomName, opts, TypedLobby.Default);
         }
 
@@ -285,7 +325,10 @@ namespace TanksGame.Managers
         public override void OnJoinRandomFailed(short returnCode, string message)
         {
             Debug.LogWarning($"[SoloMatchmaker] JoinRandom failed {returnCode}: {message}. Creating room.");
-            CreateRoom1v1();
+            if (_pendingMode == "5v5")
+                CreateRoom5v5();
+            else
+                CreateRoom1v1();
         }
 
         public override void OnJoinedRoom()
@@ -296,7 +339,10 @@ namespace TanksGame.Managers
             SetState(State.InRoomWaiting, "Waiting for opponent...");
             UpdateIcons();
             if (PhotonNetwork.CurrentRoom.PlayerCount >= maxPlayers)
+            {
+                _pendingMode = null; // reset after successful join
                 OnPaired();
+            }
         }
 
         public override void OnPlayerEnteredRoom(Player newPlayer)
@@ -304,7 +350,10 @@ namespace TanksGame.Managers
             Debug.Log("[SoloMatchmaker] Player entered: " + newPlayer.ActorNumber + ". Count=" + PhotonNetwork.CurrentRoom.PlayerCount);
             UpdateIcons();
             if (PhotonNetwork.CurrentRoom.PlayerCount >= maxPlayers)
+            {
+                _pendingMode = null;
                 OnPaired();
+            }
         }
 
         public override void OnPlayerLeftRoom(Player otherPlayer)

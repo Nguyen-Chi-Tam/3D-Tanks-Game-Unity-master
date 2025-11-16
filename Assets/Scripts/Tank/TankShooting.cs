@@ -33,7 +33,9 @@ public class TankShooting : MonoBehaviour
     private void Start ()
     {
         // The fire axis is based on the player number.
+         if(m_PlayerNumber == 1||m_PlayerNumber == 2)
         m_FireButton = "Fire" + m_PlayerNumber;
+        else m_FireButton = "Fire";
 
         // The rate that the launch force charges up is the range of possible forces by the max charge time.
         m_ChargeSpeed = (m_MaxLaunchForce - m_MinLaunchForce) / m_MaxChargeTime;

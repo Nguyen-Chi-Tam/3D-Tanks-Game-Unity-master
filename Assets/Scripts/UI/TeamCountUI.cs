@@ -11,6 +11,7 @@ using UnityEngine.UI;
 public class TeamCountUI : MonoBehaviour
 {
     [SerializeField] private GameManager m_GameManager;
+    [SerializeField] private MultiplayerGameManager m_MultiplayerManager;
     [SerializeField] private Text m_Text;
     [SerializeField, Tooltip("Seconds between text refreshes")] private float m_RefreshInterval = 0.2f;
 
@@ -27,7 +28,8 @@ public class TeamCountUI : MonoBehaviour
     private void Awake()
     {
         if (m_Text == null) m_Text = GetComponent<Text>();
-    if (m_GameManager == null) m_GameManager = Object.FindFirstObjectByType<GameManager>();
+        if (m_GameManager == null) m_GameManager = Object.FindFirstObjectByType<GameManager>();
+        if (m_MultiplayerManager == null) m_MultiplayerManager = Object.FindFirstObjectByType<MultiplayerGameManager>();
         if (m_Text != null) m_Text.supportRichText = true;
         m_Wait = new WaitForSeconds(Mathf.Max(0.05f, m_RefreshInterval));
     }
@@ -48,11 +50,20 @@ public class TeamCountUI : MonoBehaviour
 
     private void UpdateText()
     {
-        if (m_Text == null || m_GameManager == null)
+        if (m_Text == null)
             return;
 
         int blue, red;
-        if (m_GameManager.TryGetTeamAliveCounts(out blue, out red))
+        bool ok = false;
+        // Prefer Multiplayer in this scene; fall back to local GameManager if multiplayer isn't present
+        if (m_MultiplayerManager != null)
+            ok = m_MultiplayerManager.TryGetTeamAliveCounts(out blue, out red);
+        else if (m_GameManager != null)
+            ok = m_GameManager.TryGetTeamAliveCounts(out blue, out red);
+        else
+            return;
+
+        if (ok)
         {
             m_Text.enabled = true;
 
