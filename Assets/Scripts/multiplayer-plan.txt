@@ -1,0 +1,139 @@
+I’ll update our task tracker to reflect your specific game modes, matchmaking, bot takeover, and chat requirements so the plan is actionable against your goals.
+
+Added 5 todos
+
+Great scope. Here’s what I can deliver for your requirements, with a concrete, mode-aware plan and how each feature will work end-to-end.
+
+## assumptions to proceed
+- 5v5 but 2 players = Two human players total (one per team if possible), remaining 8 slots are bots.
+- 5v5 with 10 players = Up to 10 humans; any missing slots are temporarily bots until filled.
+- New joiners can replace bots mid-match (optional toggle), preserving team balance.
+- We’ll use server-authoritative netcode; recommended stack: Unity Netcode for GameObjects + UGS Relay/Lobby. Alternatives (Photon Fusion/Mirror) remain viable if you prefer.
+
+If any of these differ from your vision, I’ll adjust quickly.
+
+## what I’ll build for your features
+
+### 1) Game modes: 1v1, 5v5 (2 players), 5v5 (10 players)
+- Mode definitions and caps:
+  - 1v1: 2 players, no bots; optional bot if one leaves.
+  - 5v5 (2P): 2 humans (1–2 total), 8–9 bots to fill; strict team symmetry.
+  - 5v5 (10P): 2–10 humans; bots fill until players join; backfill replaces bots.
+- Rules config:
+  - Time limit and/or score-to-win. Overtime and surrender rules optional later.
+  - Team balancing on join/replace to avoid 6v4 situations.
+- Mode selection:
+  - In the lobby and in matchmaking queues. Session tags record the mode for discovery and backfill.
+
+Deliverables:
+- Mode enum + server-side config asset(s).
+- Lobby UI: selectable mode + constraints.
+- Validation: spawner enforces caps and fills bots as needed.
+
+### 2) Random matchmaking per mode (AoV/LoL-style)
+- Queues per mode:
+  - Quick Play per mode: players pick 1v1, 5v5(2P), or 5v5(10P).
+  - Optional MMR buckets later (casual now; rank later).
+- Region-aware:
+  - Respect Relay/region selection or closest region by ping.
+- Backfill/replace:
+  - If a player leaves, the bot takes over; queue continues to backfill that slot with a human who replaces the bot seamlessly at a safe moment (spawn, or fade-in swap).
+- Parties (later):
+  - Single-player queue first; party queue plan ready for v2.
+
+Deliverables:
+- Matchmaking service wrapper: Create/Join/find-by-mode.
+- Backfill manager: monitors open slots; invites queued players mid-match.
+
+### 3) Player leaves -> bot takeover with full health
+- Disconnect detection:
+  - On server timeout/leave, transfer pawn control to AI controller.
+- Health reset on takeover:
+  - Reset to full health immediately (or at next safe window if under damage tick).
+  - Preserve score/assists; tag as “bot-controlled”.
+
+Deliverables:
+- Server-side controller swap from PlayerController to AIController.
+- Health reset flow guarded for edge cases (downed/death in progress).
+- UI indicators that the teammate became a bot.
+
+Edge cases handled:
+- Leaving while dead or during explosion: bot spawns on next respawn with full health.
+- Leaving while carrying power-up: server decides drop/retain per design.
+
+### 4) Bot AI for tanks
+- Behaviors:
+  - Navigate using NavMesh; patrol and path to objectives.
+  - Target selection by distance/LOS; lead shots; respect cooldowns.
+  - Retreat logic at low health; pickup health/ammo if present.
+- Difficulty tiers:
+  - 1v1 bots smarter/stronger; 5v5 default difficulty balanced for fun.
+- Performance:
+  - Server-side step cost budget; LOD AI updates when many bots are present.
+
+Deliverables:
+- AI state machine/behavior tree.
+- Aim/lead and fire control integrated with the same server validation as players.
+- Difficulty tuning parameters.
+
+### 5) Chat (lobby and in-game)
+- Lobby chat:
+  - Plain text channel for lobby participants; persisted during lobby lifetime.
+- In-game chat:
+  - Team chat and optional global chat; toggleable per mode.
+- Moderation:
+  - Rate limiting (e.g., 3 msgs/5s), profanity filter, client-side mute/block.
+  - Server validation to drop oversized/frequent messages.
+- UI/UX:
+  - Minimal, clean chat panel with focus handling and scrollback.
+
+Deliverables:
+- Networked chat manager with server relays.
+- Frontend chat widget and accessibility keys.
+- Hooks for future external moderation service if desired.
+
+### 6) Backfill: replace bots with humans mid-match
+- Safe swap points:
+  - Swap at respawn or by fading control to new player, keeping bot’s transform and stats.
+- State preservation:
+  - Keep team scores, objectives, and personal stats tracking across swap.
+- Team parity:
+  - Only replace bots on the team with fewer humans first.
+
+Deliverables:
+- Bot-to-player swap orchestration.
+- Match state sync to new player on join.
+
+## architecture fit and sequencing
+
+- Networking stack: Server-authoritative NGO + Relay + Lobby (default).
+- Session model: Lobby -> Match -> Results -> Back to Lobby.
+- Ownership: Server owns all simulation; clients send inputs; bots run server-side AI.
+- Data model:
+  - Mode, team, role (N/A), playerId, lobbyId, matchId.
+  - Chat message: senderId, channel (lobby/team/global), timestamp, text.
+- Tick & smoothing:
+  - 30–60 Hz sim; interpolate others, predict self; reconcile.
+
+## acceptance criteria per feature
+- Modes: Can start each mode; correct cap/bot-fill; score/win rules trigger end.
+- Matchmaking: Queue per mode connects players from different networks via Relay; backfill fills within 60–120s under load.
+- Bot takeover: On leave, bot appears within <1s; health full; no crashes. Reclaim works on reconnect.
+- AI: Bots move, aim, shoot, and make basic decisions; don’t get stuck; perf stable with 8–9 bots.
+- Chat: Lobby and in-game chat works; team/global separation; rate limiting enforced.
+
+## delivery plan (incremental)
+- Milestone 1: Modes + lobbies + basic matchmaking + 1v1 with 2 humans.
+- Milestone 2: 5v5 (2P) with bot fill + bot AI v1 + chat.
+- Milestone 3: 5v5 (10P) + backfill replace + reconnect reclaim.
+- Milestone 4: Tuning, security, and soak tests; documentation.
+
+## what I updated in our internal tracker
+- Added tasks for game modes, matchmaking/queues, bot takeover, tank AI, chat, and backfill so we can execute these features step-by-step without scope drift.
+
+## quick clarifications
+- Confirm “5v5 but 2 players” means total players = 2, fill rest with 8 bots (one per team or auto-balance).
+- Should new joiners be allowed to replace bots mid-round, or only on next spawn? I’ll default to safe swap on respawn.
+- Chat scope: Text only for now; voice is out-of-scope unless you want Vivox later.
+
+If this aligns, I’ll lock the assumptions and produce a mode-specific UX flow and data schema next, plus a week-by-week execution schedule tied to the tasks above.
