@@ -88,9 +88,6 @@ namespace TanksGame.Managers
 
             TryApplyLocalProfileToPhoton();
 
-            // Always ensure scene sync is on before we start pairing.
-            // After leaving a previous match, MultiplayerGameManager turns this off,
-            // which would prevent the second client from auto-loading the game scene.
             PhotonNetwork.AutomaticallySyncScene = true;
 
             if (!PhotonNetwork.IsConnected)
