@@ -2,8 +2,9 @@
 
 3D Tanks Game is a 2 player shooter game using one keyboard that uses simple game mechanics, integrating world and screen space UI, as well as game architecture and audio mixing...
 
-It was implemented following [Tanks Tutorial](https://learn.unity.com/project/tanks-tutorial) on Unity Learn Platform, it was originally recorded at Unite Boston 2015.
+It was implemented following [Tanks Tutorial](https://learn.unity.com/project/tanks-tutorial) on Unity Learn Platform.
 
+With this project, I've implemented a proper game Menu, more game modes, a bot-controlled tank and the most important one, PlayerPreference to set player's name and profile pic, multiplayer with Photon PUN with chat
 ## Images 
 
 
@@ -16,10 +17,3 @@ It was implemented following [Tanks Tutorial](https://learn.unity.com/project/ta
  </br>
 </p>
 
-
-
-## Links
-
-- [Tanks Tutorial](https://learn.unity.com/project/tanks-tutorial), contains video tutorial, instructions, snippet codes.. (The best place to start).
-- [Tanks Assets](https://assetstore.unity.com/packages/essentials/tutorial-projects/tanks-tutorial-46209).
-- [Tanks Tutorial Slides](https://connect-prd-cdn.unity.com/20190226/8099b21d-6563-424c-9e01-958fe16bdbf7_TanksTutorialSlideDeck_v1.pdf).
