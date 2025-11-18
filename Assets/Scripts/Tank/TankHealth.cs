@@ -19,7 +19,7 @@ public class TankHealth : MonoBehaviour
     
     private AudioSource m_ExplosionAudio;          
     private ParticleSystem m_ExplosionParticles;   
-    private float m_CurrentHealth;  
+    public float m_CurrentHealth;  
     private bool m_Dead;            
     private PhotonView m_PhotonView;
 
