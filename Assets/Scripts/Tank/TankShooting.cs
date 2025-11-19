@@ -55,38 +55,50 @@ public class TankShooting : MonoBehaviour
             return;
         }
 
+    // On mobile: fire instantly at max range on press, and auto-fire while held
+#if UNITY_ANDROID || UNITY_IOS
+    bool atkDown = MobileInput.Instance != null && MobileInput.Instance.isMobile && MobileInput.Instance.AttackDown;
+    bool atkHeld = MobileInput.Instance != null && MobileInput.Instance.isMobile && MobileInput.Instance.AttackHeld;
+#else
+    bool atkDown = false, atkHeld = false;
+#endif
+
+        // MOBILE: instant fire at max force on press, auto-fire while held
+// On mobile, fire at half max range
+#if UNITY_ANDROID || UNITY_IOS
+        if (atkDown || (atkHeld && Time.time >= m_NextFireTime))
+        {
+            m_CurrentLaunchForce = (m_MinLaunchForce + m_MaxLaunchForce) * 0.5f;
+            Fire();
+        }
+        // PC: original charge/release logic
+#else
         // If the max force has been exceeded and the shell hasn't yet been launched...
         if (m_CurrentLaunchForce >= m_MaxLaunchForce && !m_Fired)
         {
-            // ... use the max force and launch the shell.
             m_CurrentLaunchForce = m_MaxLaunchForce;
-            Fire ();
+            Fire();
         }
         // Otherwise, if the fire button has just started being pressed...
-        else if (Input.GetButtonDown (m_FireButton))
+        else if (Input.GetButtonDown(m_FireButton))
         {
-            // ... reset the fired flag and reset the launch force.
             m_Fired = false;
             m_CurrentLaunchForce = m_MinLaunchForce;
-
-            // Change the clip to the charging clip and start it playing.
             m_ShootingAudio.clip = m_ChargingClip;
-            m_ShootingAudio.Play ();
+            m_ShootingAudio.Play();
         }
         // Otherwise, if the fire button is being held and the shell hasn't been launched yet...
-        else if (Input.GetButton (m_FireButton) && !m_Fired)
+        else if (Input.GetButton(m_FireButton) && !m_Fired)
         {
-            // Increment the launch force and update the slider.
             m_CurrentLaunchForce += m_ChargeSpeed * Time.deltaTime;
-
             m_AimSlider.value = m_CurrentLaunchForce;
         }
         // Otherwise, if the fire button is released and the shell hasn't been launched yet...
-        else if (Input.GetButtonUp (m_FireButton) && !m_Fired)
+        else if (Input.GetButtonUp(m_FireButton) && !m_Fired)
         {
-            // ... launch the shell.
-            Fire ();
+            Fire();
         }
+#endif
     }
 
 

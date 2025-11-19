@@ -56,9 +56,19 @@ public class TankMovement : MonoBehaviour
     private void Update()
     {
         // Store the player's input and make sure the audio for the engine is playing.
-        m_MovementInputValue = Input.GetAxis(m_MovementAxisName);
-        m_TurnInputValue = Input.GetAxis(m_TurnAxisName);
- 		EngineAudio();
+    #if UNITY_ANDROID || UNITY_IOS
+        if (MobileInput.Instance != null && MobileInput.Instance.isMobile)
+        {
+            m_MovementInputValue = MobileInput.Instance.GetMoveInput();
+            m_TurnInputValue = MobileInput.Instance.GetTurnInput();
+        }
+        else
+    #endif
+        {
+            m_MovementInputValue = Input.GetAxis(m_MovementAxisName);
+            m_TurnInputValue = Input.GetAxis(m_TurnAxisName);
+        }
+        EngineAudio();
     }
 
 
