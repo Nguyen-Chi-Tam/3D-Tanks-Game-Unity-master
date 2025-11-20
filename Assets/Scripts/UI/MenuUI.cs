@@ -6,6 +6,8 @@ public class MenuUI : MonoBehaviour
 {
     [Header("Panels")]
     [SerializeField] private GameObject gameModes; // Assign in Inspector (GameModes panel root)
+    [SerializeField] private GameObject multiplayerGameModesRoot; // Parent that holds GameModes + Warning
+    [SerializeField] private GameObject multiplayerWarningPanel;  // Panel shown when name missing
 
     [Header("Audio Settings UI")]
     [SerializeField] private GameObject musicDisabledIcon; // The red crossed music image
@@ -15,14 +17,24 @@ public class MenuUI : MonoBehaviour
     [SerializeField] private Image avatarImage; // Assign the avatar image UI component
     [SerializeField] private Sprite defaultAvatarSprite; // Assign a default sprite to show when none set
 
+    private const string PlayerNameKey = "player_name";
+
     public void OpenGameModes()
     {
-        if (!gameModes)
+        if (!multiplayerGameModesRoot)
         {
-            Debug.LogWarning("MenuUI.OpenGameModes: GameModes reference missing.");
+            Debug.LogWarning("MenuUI.OpenGameModes: MultiplayerGameModesRoot reference missing.");
             return;
         }
-        gameModes.SetActive(true);
+
+        // Root must be visible first
+        multiplayerGameModesRoot.SetActive(true);
+
+        // Decide which child panel to show based on PlayerPrefs name
+        bool hasName = HasStoredPlayerName();
+
+        if (gameModes) gameModes.SetActive(hasName);
+        if (multiplayerWarningPanel) multiplayerWarningPanel.SetActive(!hasName);
     }
 
     public void CloseGameModes()
@@ -111,5 +123,18 @@ public class MenuUI : MonoBehaviour
         {
             avatarImage.sprite = defaultAvatarSprite;
         }
+    }
+
+    /// <summary>
+    /// Returns true if a non-empty player name exists in PlayerPrefs.
+    /// Does not modify any UI state.
+    /// </summary>
+    private bool HasStoredPlayerName()
+    {
+        string name = string.Empty;
+        if (PlayerPrefs.HasKey(PlayerNameKey))
+            name = PlayerPrefs.GetString(PlayerNameKey, string.Empty);
+
+        return !string.IsNullOrWhiteSpace(name);
     }
 }
