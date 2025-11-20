@@ -5,6 +5,8 @@
 It was implemented following [Tanks Tutorial](https://learn.unity.com/project/tanks-tutorial) on Unity Learn Platform.
 
 With this project, I've implemented a proper game Menu, more game modes, a bot-controlled tank and the most important one, PlayerPreference to set player's name and profile pic, multiplayer with Photon PUN with chat
+
+Get the Android version here: https://github.com/Nguyen-Chi-Tam/3D-Tank-Unity-Master-Android
 ## Images 
 
 
