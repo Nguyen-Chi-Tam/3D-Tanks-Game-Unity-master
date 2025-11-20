@@ -30,8 +30,14 @@ public class MultiplayerTankSetup : MonoBehaviourPun, IPunOwnershipCallbacks, IP
         {
             _teamId = (int)photonView.InstantiationData[0];
             _ownerActorNumber = (int)photonView.InstantiationData[1];
+            // Bots in 5v5 are spawned with a third instantiation value == 1 and
+            // use negative actor numbers. Add a fallback so health color logic
+            // always treats negative actor numbers as bots even if init data
+            // changes or a prefab override drops the flag.
             if (photonView.InstantiationData.Length >= 3)
                 _isBot = ((int)photonView.InstantiationData[2]) == 1;
+            if (!_isBot && _ownerActorNumber < 0)
+                _isBot = true;
         }
 
         // Make sure movement is network-synchronized for bots and remote players
@@ -141,7 +147,8 @@ public class MultiplayerTankSetup : MonoBehaviourPun, IPunOwnershipCallbacks, IP
         if (health != null)
         {
             health.m_UseForcedFill = true;
-            // Use the same blue as team blue by default
+            // Force bot health bar to blue regardless of team (5v5 requirement).
+            // Chosen tint matches multiplayer blue tank color for consistency.
             health.m_ForcedFillColor = new Color(0.2f, 0.5f, 1f);
             health.SetHealthUI();
         }

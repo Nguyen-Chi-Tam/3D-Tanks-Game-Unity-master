@@ -37,6 +37,14 @@ public class MultiplayerTankHealthSliderColor : MonoBehaviour
     {
         if (!m_TankHealth || !m_FillImage || !m_PhotonView) return;
         float t = Mathf.Clamp01(m_TankHealth.m_CurrentHealth / m_TankHealth.m_StartingHealth);
+
+        // Respect forced-fill overrides (e.g., bots should always be blue in 5v5).
+        if (m_TankHealth.m_UseForcedFill)
+        {
+            m_FillImage.color = m_TankHealth.m_ForcedFillColor;
+            return;
+        }
+
         if (m_PhotonView.IsMine)
         {
             m_FillImage.color = Color.Lerp(m_PlayerZero, m_PlayerFull, t);
